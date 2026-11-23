@@ -25,7 +25,7 @@ gsap.to(el, { x: 100, opacity: 0, duration: 0.6, ease: "power2.out" });
 ```
 
 ```tsx
-const p = interpolate(frame, [0, 18], [0, 1], { easing: Easing.out(Easing.quad) });
+const p = interpolate(frame, [0, 18], [0, 1], { easing: Easing.out(Easing.cubic) }); // power2.out
 <div style={{ transform: `translateX(${100 * p}px)`, opacity: 1 - p }} />
 ```
 
@@ -52,7 +52,7 @@ const B_END = B_START + 12; // 0.4s
 const C_START = B_START;    // "<"
 ```
 
-**做法**：手推一遍，把结果写成常量，全部放进一个文件（本项目：`bgTimeline.js`）。推完就不要再用相对量——后面加镜头时相对量会连锁错位。
+**做法**：手推一遍，把结果写成常量，全部放进一个时间线模块（例如 `timeline.js`），动画、录制脚本、导出脚本共用它。推完就不要再用相对量——后面加镜头时相对量会连锁错位。
 
 ## 3. `defaults`
 
@@ -60,7 +60,7 @@ const C_START = B_START;    // "<"
 gsap.defaults({ ease: "power2.out", duration: 0.5 });
 ```
 
-→ 变成一个 `const EASE = Easing.out(Easing.quad)` 和一个 `const DUR = 15`，显式传参。**不要用全局默认值**，它让每一帧的计算依赖模块初始化顺序。
+→ 变成一个 `const EASE = Easing.out(Easing.cubic)`（`power2.out`）和一个 `const DUR = 15`，显式传参。**不要用全局默认值**，它让每一帧的计算依赖模块初始化顺序。
 
 ## 4. 缓动对照
 
@@ -76,6 +76,8 @@ gsap.defaults({ ease: "power2.out", duration: 0.5 });
 | `steps(5)` | `Easing.step0(5)` / `Easing.step1(5)` |
 | `CustomEase` | `Easing.bezier(x1, y1, x2, y2)` |
 | `rough` | 无对应：改成关键帧表，或少量抖动 = `random(seed)` |
+
+> GSAP 的 `power1 = quad`、`power2 = cubic`、`power3 = quart`、`power4 = quint`。Remotion 没有 `quart`/`quint` 别名，用 `poly(4)`/`poly(5)`。**最容易写错的就是 power2：它是 cubic，不是 quad。**
 
 `Easing.in/out/inOut` 包住即可，注意 `back`/`elastic` 会**过冲**，超出 `[0,1]` 时 `interpolate` 默认不钳制——想要过冲就保留，不想要就 `clamp`。
 
@@ -95,7 +97,12 @@ items.map((item, i) => {
 
 `stagger: { from: "center" }` → `const d = Math.abs(i - (n - 1) / 2) * STEP`；`from: "random"` → 用固定种子打乱一次（在模块作用域算，不要每帧算）。
 
-**亚帧问题**：`0.05 * 30 = 1.5` 帧。取整会让间隔变成 1 或 2 帧交替，视觉上反而更自然；想要精确就用小数帧（`interpolate` 接受小数）。
+**亚帧问题**：`0.05 × 30 = 1.5`，不是整数。两种处理，别混：
+
+- **先取整步长**：`Math.round(0.05 * fps) = 2` → 所有间隔统一成 2 帧（0.067s）。代价是总时长被拉长：10 个元素比原设计晚 5 帧（0.17s），元素多时偏差肉眼可见。
+- **保留小数步长**：`start + i * 1.5` 直接喂给 `interpolate`（它接受小数帧）→ 间隔精确 0.05s。
+
+不要对**每个元素的帧位置**单独取整（`Math.round(i * 1.5)`）——那才会出现 1 帧、2 帧交替的抖动。
 
 ## 6. repeat / yoyo / repeatDelay
 

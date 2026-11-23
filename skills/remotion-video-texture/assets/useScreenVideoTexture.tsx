@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { useRemotionEnvironment } from "remotion";
+import { useCurrentFrame, useRemotionEnvironment, useVideoConfig } from "remotion";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -105,9 +105,27 @@ export const RendererBridge = ({
 }) => {
   const gl = useThree((state) => state.gl);
   const { advance, invalidate } = useThree();
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const clockRef = useRef(0);
+
+  /*
+   * advance() 需要一个"时钟时间"，但**不能是墙上时钟**：performance.now() 每帧不同，
+   * 同一帧渲染两次就可能得到不同结果，直接违反"画面 = f(frame)"。
+   * 这里用帧号换算成毫秒，同一帧永远同一个值。
+   *
+   * 注意：如果场景里的 useFrame 读了 (state, delta)，delta 就来自这个时钟——
+   * 那本身就是反模式（delta 依赖"上一帧是什么时候渲染的"），useFrame 里应该
+   * 用 useCurrentFrame() 算，别用 delta。
+   */
+  clockRef.current = (frame / fps) * 1000;
 
   useLayoutEffect(() => {
-    rendererRef.current = { advance: () => advance(performance.now()), invalidate, gl };
+    rendererRef.current = {
+      advance: () => advance(clockRef.current),
+      invalidate,
+      gl,
+    };
     return () => {
       rendererRef.current = null;
     };

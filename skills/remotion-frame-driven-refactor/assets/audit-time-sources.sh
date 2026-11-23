@@ -1,28 +1,62 @@
 #!/usr/bin/env bash
-# 扫出项目里所有"外部时钟"——这些是帧驱动重构必须改掉的地方。
+# 扫出项目里所有"外部时钟"——帧驱动重构要从这些地方改起。
 # 用法: bash audit-time-sources.sh [源码目录]   默认当前目录
+#
+# 分两档：
+#   高置信 —— 基本必然要让动画跟墙上的时钟走，必须改
+#   待人工判断 —— CSS 过渡/动画、three 的 useFrame、Lottie 等，可能只是样式或已接管
 set -uo pipefail
 
 DIR="${1:-.}"
 
-# 命中这些的行，基本都意味着"动画由时间推动"，而不是由帧决定
-PATTERN='requestAnimationFrame|cancelAnimationFrame|setInterval|setTimeout|Date\.now|performance\.now|new Date\(|gsap|ScrollTrigger|anime\(|anime\.timeline|framer-motion|useSpring|useAnimation|useScroll|\.animate\(|IntersectionObserver|transition|animation:|@keyframes|lottie|Ticker|useFrame'
+INCLUDE=(--include='*.js' --include='*.jsx' --include='*.ts' --include='*.tsx'
+         --include='*.css' --include='*.html' --include='*.vue' --include='*.svelte')
+EXCLUDE=(--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=out
+         --exclude-dir=dist --exclude-dir=build --exclude-dir=.next
+         --exclude='audit-time-sources.sh')
 
-echo "== 外部时间源扫描: $DIR =="
-grep -rnE "$PATTERN" "$DIR" \
-  --include='*.js' --include='*.jsx' --include='*.ts' --include='*.tsx' \
-  --include='*.css' --include='*.html' \
-  --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=out \
-  --exclude-dir=dist --exclude-dir=build 2>/dev/null \
-  | grep -v '^\s*//' \
-  || echo "（没有命中：这个项目已经是帧驱动的）"
+# 注释行过滤：grep -rn 的输出是 "文件:行号:内容"，所以要连着前缀一起匹配
+strip_comments() {
+  grep -vE ':[0-9]+:[[:space:]]*(//|/\*|\*)' || true
+}
+
+scan() {
+  local pattern="$1"
+  grep -rnE "$pattern" "$DIR" "${INCLUDE[@]}" "${EXCLUDE[@]}" 2>/dev/null \
+    | strip_comments \
+    | grep -vE '^[[:space:]]*$' \
+    || true
+}
+
+HIGH='requestAnimationFrame|cancelAnimationFrame|setInterval|setTimeout|Date\.now|performance\.now|new Date\(|gsap\.|ScrollTrigger|anime\(|anime\.timeline|framer-motion|useSpring|useAnimation|useScroll|\.animate\(|IntersectionObserver|Ticker|lottie'
+MAYBE='\buseFrame\b|useTransition|transition(-property|-duration|-delay|-timing-function)?[[:space:]]*:|animation(-name|-duration|-delay)?[[:space:]]*:|@keyframes'
+RANDOM='Math\.random|Math\.RoundRandom|nanoid|\buuid\b'
+
+echo "== 高置信：动画由时钟驱动，必须改成帧驱动 =="
+HIGH_HITS="$(scan "$HIGH")"
+if [ -z "$HIGH_HITS" ]; then
+  echo "（无）"
+else
+  echo "$HIGH_HITS"
+  echo "---- 共 $(printf '%s\n' "$HIGH_HITS" | wc -l | tr -d ' ') 处 ----"
+fi
 
 echo
-echo "== 随机源扫描（渲染中禁止无参随机） =="
-grep -rnE 'Math\.random|nanoid|uuid' "$DIR" \
-  --include='*.js' --include='*.jsx' --include='*.ts' --include='*.tsx' \
-  --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=out 2>/dev/null \
-  || echo "（没有命中）"
+echo "== 待人工判断：可能是样式/已接管，逐条确认 =="
+MAYBE_HITS="$(scan "$MAYBE")"
+if [ -z "$MAYBE_HITS" ]; then
+  echo "（无）"
+else
+  echo "$MAYBE_HITS"
+  echo "---- 共 $(printf '%s\n' "$MAYBE_HITS" | wc -l | tr -d ' ') 处 ----"
+fi
 
 echo
-echo "提示：CSS 的 transition/animation 也会命中 transition: 之类无关写法，人工过一眼即可。"
+echo "== 随机源：渲染中禁止无参随机 =="
+RANDOM_HITS="$(scan "$RANDOM")"
+if [ -z "$RANDOM_HITS" ]; then
+  echo "（无）"
+else
+  echo "$RANDOM_HITS"
+  echo "提示：要随机就用 remotion 的 random(seed) 显式传种子。"
+fi

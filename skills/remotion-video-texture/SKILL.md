@@ -12,7 +12,7 @@ description: 把真实录屏/视频当纹理贴到 three.js 的屏幕、手机�
 - 屏幕**内容**：真实录屏，拍一次就好，是素材
 - 屏幕**外面**的一切：机身运动、镜头推拉、光效、转场、文字：全部帧驱动
 
-拿这版片子举例：笔记本从画面下方升起、镜头推近、最后整机退出、点阵溶解，全部由 `frame` 算；只有屏幕里那 3491 帧 VS Code 操作是真素材。
+案例：一条竖版宣传片里，笔记本从画面下方升起、镜头推近、最后整机退出、点阵溶解，全部由 `frame` 算；只有屏幕里那 3491 帧 VS Code 操作是真素材（2218×1440 / 30fps / ≈143 MB）。
 
 ## 架构
 
@@ -54,6 +54,8 @@ if (isRendering) {
 
 `drawImage` 之后立刻 advance，否则截图拿到上一帧的内容。
 
+`advance()` 的参数是"时钟时间"，**别传 `performance.now()`**——同一帧渲染两次会得到不同值，画面就不再是 `f(frame)` 了。用帧号换算：`advance((frame / fps) * 1000)`（`assets/useScreenVideoTexture.tsx` 里已这么写）。同理，场景里若有 `useFrame((state, delta) => ...)` 读 delta，一律改成用 `useCurrentFrame()`。
+
 ## 完整骨架
 
 见 `assets/useScreenVideoTexture.tsx`（纹理 + 每帧绘制）与 `assets/useScreenDecks.tsx`（两段播放器：预载首帧 + 变速播放）。挂载方式：
@@ -88,7 +90,7 @@ const { texture, onVideoFrame, rendererRef } = useScreenVideoTexture();
 | 倾斜发糊 | `texture.anisotropy = gl.capabilities.getMaxAnisotropy()`；`minFilter` 用 mipmap，`magFilter` 用 Linear |
 | 色彩 | `texture.colorSpace = THREE.SRGBColorSpace`，材质 `toneMapped={false}`，渲染器 `NoToneMapping` |
 | 闪烁 | 先按上面三坑查；仍闪就分块渲染（见 `remotion-chunked-export`） |
-| 素材体积 | 143 MB 的录屏会拖垮并发解码，能压就压，或用分块导出兜住 |
+| 素材体积 | 案例里 143 MB 的录屏拖垮了并发解码（40% 帧黑），能压就压，或用分块导出兜住（见 `remotion-chunked-export`） |
 
 ## 什么时候别用这套
 

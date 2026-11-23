@@ -21,7 +21,7 @@ description: 把 GSAP、Anime.js、Framer Motion、ScrollTrigger、Lottie 或手
 
 一句话自检：
 
-> 单独渲染 `--frames=200-200`，和整段渲染的第 200 帧，是否逐像素相同？
+> 单独渲染第 200 帧，和"从 0 连续渲染到 200"里的第 200 帧，是否逐像素相同？
 
 ## 换算基数
 
@@ -36,7 +36,7 @@ frame = seconds × fps
 | 原代码 | 帧驱动写法 |
 |---|---|
 | `gsap.to(el, {x: 100, duration: 1})` | `interpolate(frame, [0, fps], [0, 100])` |
-| `ease: "power2.out"` | `Easing.out(Easing.quad)` |
+| `ease: "power2.out"` | `Easing.out(Easing.cubic)` |
 | `tl.to(a).to(b, "-=0.3")` | 帧点位常量：`const aEnd = aStart + 30; const bStart = aEnd - 9;` |
 | `stagger: 0.05` | `start + i * Math.round(0.05 * fps)` |
 | `repeat: -1` | `frame % period` |
@@ -52,13 +52,15 @@ frame = seconds × fps
 
 1. **审计时间源**：`bash assets/audit-time-sources.sh <源码目录>`，列出所有 rAF / 定时器 / 动画库 / CSS 动画。
 2. **砍掉外部状态**：鼠标位置、窗口尺寸、网络、`Math.random()`。要随机就用 `random(seed)` 显式传种子；渲染中禁止无参随机。
-3. **拍平时间轴**：把链式 timeline 变成关键帧表 `[[frame, value], ...]`，帧号写成常量并集中在一处（本项目叫 `bgTimeline.js`，动画、录音脚本、导出脚本共用同一份）。
+3. **拍平时间轴**：把链式 timeline 变成关键帧表 `[[frame, value], ...]`，帧号写成常量，并**集中在一个时间线模块**里，动画、录制脚本、导出脚本共用同一份（不要各写一遍）。
 4. **派生值集中在组件顶部**：一个纯计算的 `const` 区块，下面只做渲染。
-5. **缓动映射**：GSAP ease 名 → `Easing.*`（对照表见 references）。
+5. **缓动映射**：GSAP ease 名 → `Easing.*`（对照表见 references；注意 power1=quad、power2=cubic，别搞反）。
 6. **副作用改成渲染**：`el.style.transform = ...` → `style={{transform: ...}}`；命令式 canvas 绘制 → 参数化的绘制函数。
 7. **验收**：见下节。
 
-## 本项目踩过的坑（症状 → 根因 → 修法）
+## 案例：一次竖版宣传片里踩到的坑
+
+> 症状 / 根因 / 修法，脱离这个案例同样成立。
 
 1. **结尾定格显示了视频开头**
    根因：`<Freeze frame>` 的帧号是**相对父 `<Sequence>` 起点**的，写了绝对帧就被偏移了。
@@ -92,21 +94,25 @@ frame = seconds × fps
    根因：这些库自带 ticker 或 `useFrame` 循环，不认 Remotion 的帧。
    修法：接管时钟——`@remotion/three` 用 `frameloop="never"` + 每帧 `advance()`；Lottie 用 `goToAndStop(frame, true)`；Pixi 手动 `app.ticker.update()` 或直接逐帧 `render()`。
 
-## 验收（三条，全过才算完成）
+## 验收
+
+`bash assets/verify-determinism.sh <入口文件> <CompositionId> [帧号]` 做三件事：
+
+1. **单帧渲染**（`still`）vs **连续渲染里的同一帧**（`--sequence`）——抓"必须从第 0 帧播下来才正确"的隐藏状态
+2. **并发 1 vs 并发 8** 渲染同一区间——抓"依赖渲染顺序"
+3. 全部比 **PNG 的 md5**（不要比 mp4，H.264 有损，比不出差异）
 
 ```bash
-# 1. 同帧两次渲染必须逐像素相同
-bash assets/verify-determinism.sh <入口文件> <CompositionId> 200
-
-# 2. 乱序区间渲染与连续渲染一致（Remotion 并发就是这样取帧的）
-npx remotion render <入口> <Id> out/a.mp4 --frames=180-220
-npx remotion render <入口> <Id> out/b.mp4 --frames=180-220 --concurrency=8
-# 两个文件抽同一帧比对，md5 应相同
-
-# 3. 连续帧差可接受：抽 20 帧看亮度/像素差没有突跳
+# 手动版（脚本内部就是这么做的）
+npx remotion render <入口> <Id> out/seq-a --sequence --image-format=png --frames=196-204 --concurrency=1
+npx remotion render <入口> <Id> out/seq-b --sequence --image-format=png --frames=196-204 --concurrency=8
+npx remotion still  <入口> <Id> out/still.png --frame=200
+# md5 out/seq-a/element-200.png out/seq-b/element-200.png out/still.png  三个必须相同
 ```
 
-只做 1、2 还不够——画面当然可能是"确定性的一坨屎"。视觉正确性按用户目测（见项目 `AGENTS.md`：视觉效果非必要不跑自动化验证）。
+注意：`--sequence` 默认输出 JPEG，必须显式 `--image-format=png`；文件默认命名 `element-[frame].png`。
+
+数值指标只证明"稳定"，不证明"好看"——视觉正确性由人看。
 
 ## 录屏什么时候才允许
 
@@ -116,12 +122,16 @@ npx remotion render <入口> <Id> out/b.mp4 --frames=180-220 --concurrency=8
 - **不许录**：文字动画、图表、转场、粒子、任何"改一句文案就要重来"的东西
 - **折中**：录下来的当**素材**（贴图），动画与文字仍然帧驱动重做
 
+## 环境说明
+
+结论在 **Remotion 4.0.438 + React 19 + three 0.187** 上验证过。`Easing` 实际只导出 `linear/ease/quad/cubic/poly(n)/sin/circle/exp/elastic(n)/back(s)/bounce/bezier/step0/step1`——没有 `quart`/`quint`，对应 `poly(4)`/`poly(5)`。
+
 ## 附带资产
 
 | 文件 | 用途 |
 |---|---|
 | `assets/keyframes.ts` | 关键帧插值、循环、yoyo、stagger、进度等小工具 |
-| `assets/audit-time-sources.sh` | 扫出项目里所有外部时钟 |
-| `assets/verify-determinism.sh` | 同帧两次渲染 + 比对 md5 |
+| `assets/audit-time-sources.sh` | 扫出项目里所有外部时钟（分"高置信"与"需人工判断"两档） |
+| `assets/verify-determinism.sh` | 单帧 vs 序列、并发 1 vs 8，比 PNG md5 |
 | `references/gsap-mapping.md` | GSAP/Anime/Framer 到 Remotion 的逐条对照与代码示例 |
 | `references/recording-vs-frames.md` | 录屏 vs 帧驱动的决策文档（含真实事故复盘） |
